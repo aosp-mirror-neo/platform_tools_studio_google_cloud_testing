@@ -29,6 +29,8 @@
     <module name="intellij.java.impl"/>
     <module name="intellij.java.debugger"/>
     <module name="intellij.java.debugger.impl"/>
+    <module name="intellij.platform.debugger"/>
+    <module name="intellij.platform.debugger.impl.shared"/>
   </dependencies>
 
   <description>Test recorder project.</description>
