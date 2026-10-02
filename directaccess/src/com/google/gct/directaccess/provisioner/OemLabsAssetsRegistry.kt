@@ -34,6 +34,7 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.ui.icons.CachedImageIcon
 import com.intellij.ui.icons.IconTransform
 import com.intellij.ui.icons.ImageDataLoader
+import com.intellij.ui.icons.ImageWithShape
 import com.intellij.ui.icons.LoadIconParameters
 import com.intellij.ui.icons.convertImage
 import com.intellij.ui.scale.DerivedScaleType
@@ -178,10 +179,10 @@ class OemLabsAssetsRegistry(
 
           override fun patch(transform: IconTransform): ImageDataLoader? = null
 
-          override fun loadImage(parameters: LoadIconParameters, scaleContext: ScaleContext): Image {
+          override fun loadImage(parameters: LoadIconParameters, scaleContext: ScaleContext): ImageWithShape<Image> {
             val data = if (parameters.isDark) darkThemeData else lightThemeData
             val scale = scaleContext.getScale(DerivedScaleType.PIX_SCALE).toFloat()
-            return renderSvgToImage(data, scale, parameters, scaleContext)
+            return ImageWithShape(renderSvgToImage(data, scale, parameters, scaleContext), shape = null)
           }
 
           override fun getCoords(): Pair<String, ClassLoader>? = null
