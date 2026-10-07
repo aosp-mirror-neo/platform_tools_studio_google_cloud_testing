@@ -22,6 +22,12 @@
   <depends>com.android.tools.gradle.dsl</depends>
   <depends>com.intellij.java</depends>
   <depends>org.jetbrains.kotlin</depends>
+  <!--
+    We declare this plugin in the jetbrains namespace because it depends on v2 module
+    intellij.java.debugger.impl.shared, which is marked internal, for DebuggerSettings.
+  -->
+  <content namespace="jetbrains"/>
+
   <dependencies>
     <module name="intellij.java.compiler"/>
     <module name="intellij.java.execution"/>
@@ -31,6 +37,7 @@
     <module name="intellij.java.debugger.impl"/>
     <module name="intellij.platform.debugger"/>
     <module name="intellij.platform.debugger.impl.shared"/>
+    <module name="intellij.java.debugger.impl.shared"/>
   </dependencies>
 
   <description>Test recorder project.</description>
