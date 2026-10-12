@@ -20,6 +20,7 @@ import com.android.adblib.testingutils.CoroutineTestUtils.yieldUntil
 import com.android.testutils.delayUntilCondition
 import com.android.tools.adtui.swing.findAllDescendants
 import com.android.tools.idea.flags.StudioFlags
+import com.android.tools.idea.testing.disposable
 import com.android.tools.idea.testing.flags.overrideForTest
 import com.google.common.truth.Truth.assertThat
 import com.google.gct.directaccess.CloudClientService
@@ -66,11 +67,26 @@ class DirectAccessProjectSelectorTest {
 
   @Test
   fun testNoProject() = runBlockingWithTimeout {
+    StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.overrideForTest(false, projectRule.disposable)
     firebaseProjectClientRule.setupFirebaseClient(false, false, 0, 200).toMutableList()
     selector = DirectAccessProjectSelectorImpl(projectRule.project, "", true, scope)
     yieldUntil {
       selector.findAllDescendants<AnActionLink> { it.text == "Create a Spark Plan Project..." }.firstOrNull()?.isVisible == true
     }
+  }
+
+  @Test
+  fun testNoProjectWhenBrandingIsUpdatedHidesCreateProjectOption() = runBlockingWithTimeout {
+    StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.overrideForTest(true, projectRule.disposable)
+    firebaseProjectClientRule.setupFirebaseClient(false, false, 0, 200).toMutableList()
+    selector = DirectAccessProjectSelectorImpl(projectRule.project, "", true, scope)
+
+    yieldUntil { selector.comboBox.model.selectedItem == NO_PROJECTS_AVAILABLE }
+
+    assertThat(selector.comboBox.isVisible).isTrue()
+    assertThat(selector.comboBox.isEnabled).isFalse()
+    assertThat(selector.createProjectActionLink.isVisible).isFalse()
+    assertThat(selector.createProjectMessagePanel.isVisible).isFalse()
   }
 
   @Test
@@ -110,6 +126,7 @@ class DirectAccessProjectSelectorTest {
 
   @Test
   fun testErrorWhileFetchingFirebaseProjectDisablesSelector() = runBlockingWithTimeout {
+    StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.overrideForTest(false, projectRule.disposable)
     projectList = firebaseProjectClientRule.setupFirebaseClient(true).toMutableList()
     selector = DirectAccessProjectSelectorImpl(projectRule.project, "preferredProject", true, scope)
 
@@ -118,6 +135,21 @@ class DirectAccessProjectSelectorTest {
     assertThat(selector.comboBox.isVisible).isTrue()
     assertThat(selector.comboBox.model.size).isEqualTo(1)
     assertThat(selector.comboBox.model.selectedItem).isEqualTo(ERROR_FETCHING_FIREBASE_PROJECT)
+    assertThat(selector.comboBox.isEnabled).isFalse()
+    selector.assertDisabledTextColor(NamedColorUtil.getErrorForeground())
+  }
+
+  @Test
+  fun testErrorWhileFetchingProjectWhenBrandingIsUpdatedDisablesSelector() = runBlockingWithTimeout {
+    StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.overrideForTest(true, projectRule.disposable)
+    projectList = firebaseProjectClientRule.setupFirebaseClient(true).toMutableList()
+    selector = DirectAccessProjectSelectorImpl(projectRule.project, "preferredProject", true, scope)
+
+    yieldUntil { scope.coroutineContext.job.children.toList().isEmpty() }
+
+    assertThat(selector.comboBox.isVisible).isTrue()
+    assertThat(selector.comboBox.model.size).isEqualTo(1)
+    assertThat(selector.comboBox.model.selectedItem).isEqualTo(ERROR_FETCHING_CLOUD_PROJECTS)
     assertThat(selector.comboBox.isEnabled).isFalse()
     selector.assertDisabledTextColor(NamedColorUtil.getErrorForeground())
   }

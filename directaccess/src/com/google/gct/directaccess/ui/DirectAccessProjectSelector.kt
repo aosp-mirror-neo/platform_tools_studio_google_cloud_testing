@@ -99,7 +99,8 @@ class DirectAccessProjectSelectorImpl(
   private val noProjectsCard = "no projects"
   private val projectSelectorCard = "project selector"
   private val newProjectCreatedCard = "project created"
-  private val createProjectMessagePanel = panel {
+  @VisibleForTesting
+  internal val createProjectMessagePanel = panel {
     customizeSpacingConfiguration(EmptySpacingConfiguration()) {
       // TODO (b/364673782): update text with UX requirements.
       row { text("Create a free spark plan to have free minutes").apply { align(Align.FILL) } }
@@ -199,7 +200,10 @@ class DirectAccessProjectSelectorImpl(
       }
     } else {
       val projects = getProjects()
-      val card = if (projects?.isEmpty() == true) noProjectsCard else projectSelectorCard
+      // Creating a project from this dialog is only offered with the legacy Firebase branding. With the Google Cloud branding, users
+      // without a project see the disabled selector instead of the "create project" link.
+      val canCreateProject = !StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.get()
+      val card = if (projects?.isEmpty() == true && canCreateProject) noProjectsCard else projectSelectorCard
 
       if (projects?.size == 1) {
         preferredProject = projects.first()
@@ -248,7 +252,11 @@ class DirectAccessProjectSelectorImpl(
       when {
         projects == null -> {
           val errorMsg =
-            if (StudioFlags.DIRECT_ACCESS_LIST_GCP_PROJECTS.get()) ERROR_FETCHING_CLOUD_PROJECTS else ERROR_FETCHING_FIREBASE_PROJECT
+            if (StudioFlags.DIRECT_ACCESS_LIST_GCP_PROJECTS.get() || StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.get()) {
+              ERROR_FETCHING_CLOUD_PROJECTS
+            } else {
+              ERROR_FETCHING_FIREBASE_PROJECT
+            }
           model = CollectionComboBoxModel(listOf(errorMsg))
           updateSelectedItem(errorMsg)
           isEnabled = false

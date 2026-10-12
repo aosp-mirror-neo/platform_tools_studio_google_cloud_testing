@@ -41,10 +41,10 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.asContextElement
 import com.intellij.openapi.components.service
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.wm.ex.ProgressIndicatorEx
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBLabel
@@ -59,6 +59,9 @@ import icons.StudioIcons
 import io.grpc.Status
 import io.grpc.StatusRuntimeException
 import java.awt.CardLayout
+import java.awt.Component
+import java.awt.Container
+import java.awt.Dimension
 import java.awt.event.ActionEvent
 import javax.swing.AbstractAction
 import javax.swing.Action
@@ -67,6 +70,7 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collect
@@ -112,7 +116,7 @@ class SelectProjectDialog(private val project: Project) : DialogWrapper(false) {
   }
 
   override fun createCenterPanel(): JComponent {
-    val layout = CardLayout()
+    val layout = VisibleCardLayout()
     val panel = JPanel(layout)
     val loginKey = "Login"
     val projectSelectionKey = "Project Selection"
@@ -135,7 +139,11 @@ class SelectProjectDialog(private val project: Project) : DialogWrapper(false) {
         if (isNowEnabled != isEnabled) {
           @Suppress("AssignedValueIsNeverRead")
           isNowEnabled = isEnabled
-          updateActivePanel(isEnabled)
+          withContext(uiContext) {
+            updateActivePanel(isEnabled)
+            // Fit the dialog to the card that is now shown, as the cards differ in height.
+            if (isShowing) pack()
+          }
         }
       }
     }
@@ -400,16 +408,14 @@ class SelectProjectDialog(private val project: Project) : DialogWrapper(false) {
 
   override fun doOKAction() {
     if (temporarySelectedCloudProjectName != temporarySelectedCloudProjectManager.value?.cloudProject?.name) {
-      object : Task.Modal(project, "Loading cloud project information...", false) {
+      val task =
+        object : Task.Modal(project, "Loading cloud project information...", false) {
           override fun run(indicator: ProgressIndicator) {
             indicator.isIndeterminate = true
-            if (indicator !is ProgressIndicatorEx) {
-              return
-            }
             confirmSelection()
           }
         }
-        .queue()
+      ProgressManager.getInstance().run(task)
     } else {
       confirmSelection()
     }
@@ -417,6 +423,8 @@ class SelectProjectDialog(private val project: Project) : DialogWrapper(false) {
   }
 
   override fun dispose() {
+    // Stop the coroutines keeping the UI in sync with the login state and the selected project, so they do not outlive the dialog.
+    scope.cancel()
     super.dispose()
     // Dispose the temporary selected project manager when its selection is not performed.
     // This usually happens when user cancels or closes the dialog.
@@ -426,5 +434,25 @@ class SelectProjectDialog(private val project: Project) : DialogWrapper(false) {
   /** This dialog only shows the OK action that does nothing. */
   override fun createActions(): Array<Action> {
     return arrayOf(cancelAction, okAction)
+  }
+}
+
+/**
+ * A [CardLayout] whose height follows the visible card instead of the tallest one.
+ *
+ * [CardLayout] reserves room for its tallest card, which leaves empty space below the content of shorter cards. The width still follows the
+ * widest card so that the dialog does not change width when switching cards.
+ */
+private class VisibleCardLayout : CardLayout() {
+  override fun preferredLayoutSize(parent: Container): Dimension =
+    super.preferredLayoutSize(parent).withVisibleCardHeight(parent) { it.preferredSize }
+
+  override fun minimumLayoutSize(parent: Container): Dimension =
+    super.minimumLayoutSize(parent).withVisibleCardHeight(parent) { it.minimumSize }
+
+  private fun Dimension.withVisibleCardHeight(parent: Container, cardSize: (Component) -> Dimension): Dimension {
+    val visibleCard = parent.components.firstOrNull { it.isVisible } ?: return this
+    val insets = parent.insets
+    return Dimension(width, cardSize(visibleCard).height + insets.top + insets.bottom + vgap * 2)
   }
 }

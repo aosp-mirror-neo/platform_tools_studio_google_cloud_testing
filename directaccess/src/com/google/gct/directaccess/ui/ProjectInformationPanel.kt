@@ -45,11 +45,37 @@ private const val VIEW_PRICING_DETAILS_LINK = "https://d.android.com/r/studio-ui
 private const val SPARK_PLAN_KEY = "Spark"
 private const val BLAZE_PLAN_KEY = "Blaze"
 
+private val grayLabelFactory: (String) -> JBLabel = { text -> JBLabel(text).apply { foreground = UIUtil.getLabelInfoForeground() } }
+
 class ProjectInformationPanel(
   scope: CoroutineScope,
   uiContext: CoroutineContext,
   cloudProjectManagerFlow: StateFlow<DirectAccessCloudProjectManager?>,
 ) : JPanel(VerticalLayout(0)) {
+
+  private val instructionPanel =
+    JPanel(HorizontalLayout(0)).apply {
+      foreground = UIUtil.getLabelInfoForeground()
+      add(grayLabelFactory("Click "))
+      add(grayLabelFactory("dropdown in device manager to add new devices.").apply { icon = StudioIcons.Common.ADD })
+    }
+
+  init {
+    // Firebase plans (Spark/Blaze) and their quota do not apply with the Google Cloud branding, so only the device instructions are shown.
+    if (!StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.get()) {
+      FirebasePlanInformation(this, scope, uiContext, cloudProjectManagerFlow).attach()
+    }
+    add(instructionPanel)
+  }
+}
+
+/** Manages and displays the Firebase plan (Spark/Blaze) and quota usage information. */
+private class FirebasePlanInformation(
+  private val parentPanel: JPanel,
+  private val scope: CoroutineScope,
+  private val uiContext: CoroutineContext,
+  private val cloudProjectManagerFlow: StateFlow<DirectAccessCloudProjectManager?>,
+) {
   private val planLabel =
     JBLabel().apply {
       horizontalTextPosition = JBLabel.LEFT
@@ -63,8 +89,6 @@ class ProjectInformationPanel(
       add(planHelpIcon)
     }
 
-  private val grayLabelFactory: (String) -> JBLabel = { text -> JBLabel(text).apply { foreground = UIUtil.getLabelInfoForeground() } }
-
   private val sparkUsedMinutesLabel = JBLabel()
   private val sparkRemainingMinutesLabel = grayLabelFactory("")
   private val blazeUsedMinutesLabel = JBLabel().apply { font = JBFont.h2().asBold() }
@@ -74,27 +98,13 @@ class ProjectInformationPanel(
   private val usageFlow = MutableStateFlow<Double?>(null)
   private val usageProgressBar = UsageProgressBar(scope, usageFlow)
 
-  private val informationLabel =
-    grayLabelFactory(
-      if (StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.get()) {
-        "Estimated minutes based on usage across all Google Cloud project members."
-      } else {
-        "Estimated minutes based on usage across all Firebase project members."
-      }
-    )
-  private val instructionPanel =
-    JPanel(HorizontalLayout(0)).apply {
-      foreground = UIUtil.getLabelInfoForeground()
-      add(grayLabelFactory("Click "))
-      add(grayLabelFactory("dropdown in device manager to add new devices.").apply { icon = StudioIcons.Common.ADD })
-    }
-
+  private val informationLabel = grayLabelFactory("Estimated minutes based on usage across all Firebase project members.")
   private val planCardLayout = CardLayout()
   private val usagePanel = JPanel(planCardLayout)
 
   private val viewPricingDetailsHyperlink = HyperlinkLabel("View Pricing Details").apply { setHyperlinkTarget(VIEW_PRICING_DETAILS_LINK) }
 
-  init {
+  fun attach() {
     val sparkUsagePanel =
       JPanel(VerticalLayout(5)).apply {
         add(
@@ -119,10 +129,9 @@ class ProjectInformationPanel(
     usagePanel.add(blazeUsagePanel, BLAZE_PLAN_KEY)
     planCardLayout.show(usagePanel, SPARK_PLAN_KEY)
 
-    add(planPanel)
-    add(usagePanel)
-    add(informationLabel)
-    add(instructionPanel)
+    parentPanel.add(planPanel)
+    parentPanel.add(usagePanel)
+    parentPanel.add(informationLabel)
 
     updatePlanInformation(null)
     scope.launch {

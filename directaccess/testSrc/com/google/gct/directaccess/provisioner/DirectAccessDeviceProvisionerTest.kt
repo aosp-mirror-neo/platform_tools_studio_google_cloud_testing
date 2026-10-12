@@ -25,6 +25,7 @@ import com.android.adblib.testing.FakeAdbSession
 import com.android.adblib.testingutils.CoroutineTestUtils.runBlockingWithTimeout
 import com.android.adblib.testingutils.CoroutineTestUtils.yieldUntil
 import com.android.adblib.utils.createChildScope
+import com.android.flags.junit.FlagRule
 import com.android.sdklib.deviceprovisioner.DeviceActionException
 import com.android.sdklib.deviceprovisioner.DeviceError
 import com.android.sdklib.deviceprovisioner.DeviceProvisioner
@@ -173,6 +174,8 @@ class DirectAccessDeviceProvisionerTest {
       .around(fakeToolWindowRule)
       .around(cleanUpNotificationRule)
       .around(propertiesComponentRule)
+      // Tests assert the Firebase branding, e.g. the lab icons, unless they override this flag.
+      .around(FlagRule(StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING, false))
 
   private val session = FakeAdbSession()
   private lateinit var plugin: DirectAccessDeviceProvisionerPlugin

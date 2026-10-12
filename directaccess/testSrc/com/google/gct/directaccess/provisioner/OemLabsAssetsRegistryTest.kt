@@ -15,6 +15,7 @@
  */
 package com.google.gct.directaccess.provisioner
 
+import com.android.flags.junit.FlagRule
 import com.android.tools.idea.flags.StudioFlags
 import com.android.tools.idea.testing.flags.overrideForTest
 import com.google.common.truth.Truth.assertThat
@@ -26,6 +27,8 @@ import org.junit.Test
 class OemLabsAssetsRegistryTest {
   @get:Rule val applicationRule = ApplicationRule()
   @get:Rule val disposableRule = DisposableRule()
+  // Tests assert the Firebase branding unless they override this flag to test the Google Cloud branding.
+  @get:Rule val brandingFlagRule = FlagRule(StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING, false)
 
   @Test
   fun `google lab test`() {

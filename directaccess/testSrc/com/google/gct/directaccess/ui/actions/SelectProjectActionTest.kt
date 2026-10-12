@@ -78,6 +78,7 @@ import com.intellij.openapi.application.EDT
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.testFramework.ProjectRule
 import com.intellij.testFramework.RunsInEdt
 import com.intellij.testFramework.TestActionEvent
@@ -100,6 +101,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.After
@@ -155,6 +157,8 @@ class SelectProjectActionTest {
       .around(popupRule)
       .around(loginUsersRule)
       .around(FlagRule(StudioFlags.SHOW_MARKETING_DIALOG, false))
+      // Tests assert the Firebase branding unless they override this flag to test the Google Cloud branding.
+      .around(FlagRule(StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING, false))
       .around(firebaseProjectClientRule)!!
 
   private val scope = CoroutineScope(Dispatchers.IO)
@@ -786,6 +790,135 @@ class SelectProjectActionTest {
     }
 
     projectRule.project.service<DirectAccessPersistentStateComponent>().state.selectedCloudProject = null
+  }
+
+  @RunsInEdt
+  @Test
+  fun testDialogHeightFitsProjectSelectionPanelWhenBrandingIsUpdated() = CoroutineTestUtils.runBlockingWithTimeout {
+    StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING.overrideForTest(true, projectRule.disposable)
+    // Log in up front so that the dialog opens on the project selection panel.
+    loginUsersRule.setActiveUser("test@google.com")
+    val selectDeviceAction = SelectProjectAction()
+    firebaseProjectClientRule.setupFirebaseClient(
+      throwErrorOnExecute = false,
+      returnMalformedJson = false,
+      projectList = listOf(supportedProjectName),
+    )
+
+    val event =
+      TestActionEvent.createTestEvent(
+        selectDeviceAction,
+        {
+          when (it) {
+            CommonDataKeys.PROJECT.name -> projectRule.project
+            else -> null
+          }
+        },
+        MouseEvent(JPanel(), MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0, 1, true, 0),
+      )
+
+    withContext(Dispatchers.EDT) {
+      createModalDialogAndInteractWithIt({ selectDeviceAction.actionPerformed(event) }) { dialog ->
+        val cardPanel =
+          dialog.rootPane.findAllDescendants<JPanel> { it.getClientProperty(DialogWrapper.DIALOG_CONTENT_PANEL_PROPERTY) == true }.first()
+        val (visibleCards, hiddenCards) = cardPanel.components.partition { it.isVisible }
+        val projectSelectionPanel = visibleCards.single()
+        val loginPanel = hiddenCards.single()
+        assertThat(projectSelectionPanel.findAllDescendants<ComboBox<String>>().toList()).hasSize(1)
+        // Without the plan information, the project selection panel is shorter than the login panel. The dialog should be sized to
+        // the visible panel rather than the tallest one, which would otherwise leave empty space below the project selection panel.
+        assertThat(loginPanel.preferredSize.height).isGreaterThan(projectSelectionPanel.preferredSize.height)
+        assertThat(cardPanel.preferredSize.height).isEqualTo(projectSelectionPanel.preferredSize.height)
+        assertThat(cardPanel.minimumSize.height).isEqualTo(projectSelectionPanel.minimumSize.height)
+        dialog.doCancelAction()
+      }
+    }
+  }
+
+  @RunsInEdt
+  @Test
+  fun testCoroutinesAreCancelledWhenDialogIsClosed() = CoroutineTestUtils.runBlockingWithTimeout {
+    // Log in up front so that the dialog opens on the project selection panel, which starts coroutines for the project selector.
+    loginUsersRule.setActiveUser("test@google.com")
+    val selectDeviceAction = SelectProjectAction()
+    firebaseProjectClientRule.setupFirebaseClient(
+      throwErrorOnExecute = false,
+      returnMalformedJson = false,
+      projectList = listOf(supportedProjectName),
+    )
+
+    val event =
+      TestActionEvent.createTestEvent(
+        selectDeviceAction,
+        {
+          when (it) {
+            CommonDataKeys.PROJECT.name -> projectRule.project
+            else -> null
+          }
+        },
+        MouseEvent(JPanel(), MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0, 1, true, 0),
+      )
+
+    lateinit var dialog: SelectProjectDialog
+    withContext(Dispatchers.EDT) {
+      createModalDialogAndInteractWithIt({ selectDeviceAction.actionPerformed(event) }) {
+        dialog = it as SelectProjectDialog
+        assertThat(dialog.scope.isActive).isTrue()
+        dialog.doCancelAction()
+      }
+    }
+
+    // The coroutines must not outlive the dialog, as its scope is a child of the long-lived DirectAccessService scope.
+    assertThat(dialog.scope.isActive).isFalse()
+  }
+
+  @RunsInEdt
+  @Test
+  fun testOkActionRunsModalTaskSynchronouslyBeforeDialogIsDisposed() = CoroutineTestUtils.runBlockingWithTimeout {
+    loginUsersRule.setActiveUser("test@google.com")
+    val selectDeviceAction = SelectProjectAction()
+    firebaseProjectClientRule.setupFirebaseClient(
+      throwErrorOnExecute = false,
+      returnMalformedJson = false,
+      projectList = listOf(supportedProjectName),
+    )
+
+    val mockDirectAccessService = mock<DirectAccessService>()
+    val selectedCloudProject = MutableStateFlow<String?>(null)
+    whenever(mockDirectAccessService.cloudProjectManager).thenReturn(MutableStateFlow(null))
+    whenever(mockDirectAccessService.scope).thenReturn(scope)
+    whenever(mockDirectAccessService.permissionFlow).thenReturn(MutableStateFlow(DirectAccessPermissionStatus.Full()))
+    whenever(mockDirectAccessService.selectCloudProject(anyOrNull())).thenAnswer {
+      selectedCloudProject.value = it.arguments[0] as? String
+      Unit
+    }
+    projectRule.project.replaceService(DirectAccessService::class.java, mockDirectAccessService, projectRule.disposable)
+
+    val event =
+      TestActionEvent.createTestEvent(
+        selectDeviceAction,
+        {
+          when (it) {
+            CommonDataKeys.PROJECT.name -> projectRule.project
+            else -> null
+          }
+        },
+        MouseEvent(JPanel(), MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0, 1, true, 0),
+      )
+
+    lateinit var dialog: SelectProjectDialog
+    withContext(Dispatchers.EDT) {
+      createModalDialogAndInteractWithIt({ selectDeviceAction.actionPerformed(event) }) {
+        dialog = it as SelectProjectDialog
+        waitForCondition { dialog.rootPane.findAllDescendants<ComboBox<String>>().iterator().hasNext() }
+        val comboBox = dialog.rootPane.findAllDescendants<ComboBox<String>>().first()
+        waitForCondition { comboBox.model.selectedItem == supportedProjectName }
+        dialog.performOKAction()
+      }
+    }
+
+    assertThat(selectedCloudProject.value).isEqualTo(supportedProjectName)
+    assertThat(dialog.scope.isActive).isFalse()
   }
 
   @Test

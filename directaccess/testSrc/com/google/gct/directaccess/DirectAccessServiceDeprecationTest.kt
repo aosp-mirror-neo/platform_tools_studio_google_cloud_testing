@@ -18,6 +18,7 @@ package com.google.gct.directaccess
 import com.android.adblib.testing.FakeAdbSession
 import com.android.adblib.testingutils.CoroutineTestUtils.runBlockingWithTimeout
 import com.android.adblib.testingutils.CoroutineTestUtils.yieldUntil
+import com.android.flags.junit.FlagRule
 import com.android.sdklib.deviceprovisioner.DeviceId
 import com.android.sdklib.deviceprovisioner.DeviceProperties
 import com.android.sdklib.deviceprovisioner.DeviceTemplate
@@ -28,6 +29,7 @@ import com.android.tools.analytics.TestUsageTracker
 import com.android.tools.analytics.UsageTracker
 import com.android.tools.idea.concurrency.createCoroutineScope
 import com.android.tools.idea.deviceprovisioner.NotificationBannersExtension
+import com.android.tools.idea.flags.StudioFlags
 import com.android.tools.idea.gservices.DevServicesDeprecationData
 import com.android.tools.idea.gservices.DevServicesDeprecationStatus
 import com.android.tools.idea.testing.disposable
@@ -78,6 +80,8 @@ import org.mockito.kotlin.whenever
 class DirectAccessServiceDeprecationTest {
 
   @get:Rule val projectRule = ProjectRule()
+  // Tests assert the Firebase branding of the deprecation messages.
+  @get:Rule val brandingFlagRule = FlagRule(StudioFlags.DIRECT_ACCESS_CLOUD_BRANDING, false)
 
   private val session = FakeAdbSession()
   private var deprecationProto: DevServicesDeprecationData =
