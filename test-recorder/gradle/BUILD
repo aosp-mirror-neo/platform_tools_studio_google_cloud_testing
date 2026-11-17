@@ -23,3 +23,31 @@ iml_module(
         "//tools/adt/idea/gradle-dsl-android:intellij.android.gradle.dsl.android",
     ],
 )
+
+# managed by go/iml_to_build
+iml_module(
+    name = "test-recorder.gradle.tests",
+    iml_files = ["test-recorder.gradle.tests.iml"],
+    test_class = "com.google.gct.testrecorder.TestRecorderGradleTestSuite",
+    test_data = [
+        "//prebuilts/studio/sdk:platforms/latest",
+    ],
+    # do not sort: must match IML order
+    test_deps = [
+        "//tools/studio/google/cloud/testing/test-recorder/gradle:test-recorder.gradle",
+        "//tools/studio/google/cloud/testing/test-recorder",
+        "@intellij//:intellij-sdk",
+        "//tools/adt/idea/android-common:intellij.android.common",
+        "//tools/adt/idea/project-system:intellij.android.projectSystem",
+        "//tools/adt/idea/project-system-gradle:intellij.android.projectSystem.gradle",
+        "//tools/adt/idea/android-test-framework:intellij.android.testFramework",
+        "//tools/base/sdk-common:studio.android.sdktools.sdk-common",
+        "//tools/adt/idea/.idea/libraries:junit4",
+        "//tools/adt/idea/.idea/libraries:truth",
+        "//tools/adt/idea/adt-testutils:intellij.android.adt.testutils",
+        "//tools/base/testutils:studio.android.sdktools.testutils",
+    ],
+    test_friends = ["//tools/studio/google/cloud/testing/test-recorder/gradle:test-recorder.gradle"],
+    test_srcs = ["testSrc"],
+    visibility = ["//visibility:public"],
+)

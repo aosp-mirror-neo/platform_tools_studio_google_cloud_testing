@@ -37,27 +37,29 @@ import com.android.ide.common.gradle.Version;
 import com.android.ide.common.repository.GoogleMavenArtifactId;
 import com.android.tools.analytics.UsageTracker;
 import com.android.tools.analytics.UsageTrackerUtils;
+import com.android.tools.idea.AndroidStudioKotlinPluginUtils;
 import com.android.tools.idea.gradle.dependencies.DependenciesHelper;
 import com.android.tools.idea.gradle.dependencies.ExactDependencyMatcher;
 import com.android.tools.idea.gradle.dsl.api.GradleBuildModel;
-import com.android.tools.idea.gradle.dsl.api.PluginModel;
 import com.android.tools.idea.gradle.dsl.api.ProjectBuildModel;
 import com.android.tools.idea.gradle.dsl.api.android.AndroidModel;
 import com.android.tools.idea.gradle.dsl.api.dependencies.ArtifactDependencyModel;
 import com.android.tools.idea.gradle.dsl.api.dependencies.ArtifactDependencySpec;
-import com.android.tools.idea.gradle.dsl.api.ext.GradlePropertyModel;
+import com.android.tools.idea.gradle.project.model.NdkModuleModel;
 import com.android.tools.idea.gradle.repositories.RepositoryUrlManager;
 import com.android.tools.idea.projectsystem.DependencyScopeType;
 import com.android.tools.idea.projectsystem.GradleToken;
 import com.android.tools.idea.projectsystem.ProjectSystemSyncManager;
 import com.android.tools.idea.projectsystem.gradle.GradleModuleSystem;
 import com.android.tools.idea.projectsystem.gradle.GradleProjectSystem;
+import com.android.tools.idea.projectsystem.gradle.LinkedAndroidModuleGroupUtilsKt;
 import com.google.common.collect.ImmutableList;
 import com.google.gct.testrecorder.event.ElementAction;
 import com.google.gct.testrecorder.event.TestRecorderEvent;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent.EventCategory;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent.EventKind;
+import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.progress.ProgressIndicator;
@@ -84,20 +86,24 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
 
   @Override
   public boolean supportsKotlin(@NotNull GradleProjectSystem projectSystem, @NotNull Module testClassModule) {
-    GradleBuildModel gradleBuildModel = GradleBuildModel.get(testClassModule);
-    if (gradleBuildModel == null) {
-      return false;
-    }
-    List<String> pluginNames = PluginModel.extractNames(gradleBuildModel.plugins());
-    return pluginNames.contains("kotlin-android") || pluginNames.contains("org.jetbrains.kotlin.android");
+    return ReadAction.compute(() -> {
+      if (testClassModule.isDisposed() || testClassModule.getProject().isDisposed()) {
+        return false;
+      }
+      return AndroidStudioKotlinPluginUtils.hasKotlinFacet(
+        LinkedAndroidModuleGroupUtilsKt.getMainModule(testClassModule)
+      );
+    });
   }
 
   @Override
   public boolean isNativeProject(@NotNull GradleProjectSystem projectSystem, @NotNull Module module) {
-    // TODO(b/294274926): Do not use DSL models to detect Gradle native projects.
-    return GradleBuildModel.get(module) != null
-           && android(GradleBuildModel.get(module)).externalNativeBuild().cmake().version().getValueType()
-              != GradlePropertyModel.ValueType.NONE;
+    return ReadAction.compute(() -> {
+      if (module.isDisposed() || module.getProject().isDisposed()) {
+        return false;
+      }
+      return NdkModuleModel.get(module) != null;
+    });
   }
 
   private static class SetupEnsurer {
