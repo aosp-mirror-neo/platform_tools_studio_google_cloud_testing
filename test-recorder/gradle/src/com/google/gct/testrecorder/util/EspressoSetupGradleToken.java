@@ -59,13 +59,17 @@ import com.google.gct.testrecorder.event.TestRecorderEvent;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent.EventCategory;
 import com.google.wireless.android.sdk.stats.AndroidStudioEvent.EventKind;
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.MessageDialogBuilder;
+import com.intellij.psi.PsiDocumentManager;
 import java.util.List;
 import javax.swing.JPanel;
 import org.jetbrains.android.facet.AndroidFacet;
@@ -113,13 +117,13 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
     JPanel rootPanel;
     List<ElementAction> elementActions;
 
-    private boolean myNeedsContribDependency = false;
-    private boolean myUsesAnyEspressoDependency = false;
-    private boolean myUsesAndroidxDependency = false;
-    private boolean myUsesGrantPermissionRule = false;
-    private Version myMinEspressoCoreVersion = MIN_ESPRESSO_CORE_VERSION_FOR_LARGE_TEST;
+    private volatile boolean myNeedsContribDependency = false;
+    private volatile boolean myUsesAnyEspressoDependency = false;
+    private volatile boolean myUsesAndroidxDependency = false;
+    private volatile boolean myUsesGrantPermissionRule = false;
+    private volatile Version myMinEspressoCoreVersion = MIN_ESPRESSO_CORE_VERSION_FOR_LARGE_TEST;
     private final Version myMinAndroidxEspressoCoreVersion = MIN_ANDROIDX_ESPRESSO_CORE_VERSION;
-    private Version myMinRulesVersion = MIN_RULES_VERSION_FOR_LARGE_TEST;
+    private volatile Version myMinRulesVersion = MIN_RULES_VERSION_FOR_LARGE_TEST;
     private final Version myMinAndroidxRulesVersion = MIN_ANDROIDX_RULES_VERSION;
     private final Version myMinAndroidxExtJunitVersion = MIN_ANDROIDX_EXT_JUNIT_VERSION;
 
@@ -138,36 +142,67 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
       initializeDependencyRequirements();
     }
 
-    private boolean setup() {
-      Project project = projectSystem.getProject();
-      ProjectBuildModel projectModel = ProjectBuildModel.get(project);
-      GradleBuildModel gradleBuildModel = projectModel.getModuleBuildModel(testClassModule);
-      if (gradleBuildModel != null) {
-        GradleModuleSystem gradleModuleSystem = projectSystem.getModuleSystem(testClassModule);
-        AndroidModel androidModel = android(gradleBuildModel);
-        // androidModel will be null when the Gradle experimental plugin is used and it's not possible to update the instrumentation runner.
-        // TODO: Provide an appropriate error message or some alternative way to update instrumentation runner when the Gradle experimental
-        // plugin is used.
-        if (!hasAllRequiredEspressoDependencies(androidModel, gradleModuleSystem)) {
-          UsageTracker.log(UsageTrackerUtils.withProjectId(
-            AndroidStudioEvent.newBuilder()
-              .setCategory(EventCategory.TEST_RECORDER)
-              .setKind(EventKind.TEST_RECORDER_MISSING_ESPRESSO_DEPENDENCIES),
-            project));
+    private record SetupModels(
+      @NotNull ProjectBuildModel projectModel,
+      @NotNull GradleBuildModel gradleBuildModel,
+      @NotNull GradleModuleSystem gradleModuleSystem
+    ) {}
 
-          if (MessageDialogBuilder.yesNo("Missing or obsolete Espresso dependencies",
-                                         "Some dependencies for running Espresso tests are missing or obsolete.\n" +
-                                         "Would you like to automatically add/update Espresso dependencies for this app?\n" +
-                                         "To complete the set up, Gradle might ask you to install the missing libraries.\n" +
-                                         "Please click on the corresponding link(s) to install them.").icon(null).ask(rootPanel)) {
-            setupEspresso(projectModel, gradleBuildModel, gradleModuleSystem);
+    @SuppressWarnings("UnstableApiUsage")
+    private boolean setup() {
+      Application application = ApplicationManager.getApplication();
+      application.assertIsDispatchThread();
+      if (application.isWriteAccessAllowed() || application.isTopmostReadAccessAllowed()) {
+        throw new IllegalStateException("ensureSetup must not be called inside an explicit read or write action");
+      }
+      Project project = projectSystem.getProject();
+      if (project.isDisposed()) {
+        return false;
+      }
+      PsiDocumentManager.getInstance(project).commitAllDocuments();
+      SetupModels setupModels = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+        () -> ReadAction.compute(() -> {
+          if (project.isDisposed() || testClassModule.isDisposed()) {
+            return null;
           }
+          ProjectBuildModel projectModel = ProjectBuildModel.get(project);
+          GradleBuildModel gradleBuildModel = projectModel.getModuleBuildModel(testClassModule);
+          if (gradleBuildModel == null) {
+            return null;
+          }
+          GradleModuleSystem gradleModuleSystem = projectSystem.getModuleSystem(testClassModule);
+          AndroidModel androidModel = android(gradleBuildModel);
+          // androidModel will be null when the Gradle experimental plugin is used and it's not possible to update the instrumentation runner.
+          // TODO: Provide an appropriate error message or some alternative way to update instrumentation runner when the Gradle experimental
+          // plugin is used.
+          if (hasAllRequiredEspressoDependencies(androidModel, gradleModuleSystem)) {
+            return null;
+          }
+          return new SetupModels(projectModel, gradleBuildModel, gradleModuleSystem);
+        }),
+        "Checking Espresso Dependencies",
+        /* canBeCanceled = */ false,
+        project
+      );
+      if (setupModels != null) {
+        UsageTracker.log(UsageTrackerUtils.withProjectId(
+          AndroidStudioEvent.newBuilder()
+            .setCategory(EventCategory.TEST_RECORDER)
+            .setKind(EventKind.TEST_RECORDER_MISSING_ESPRESSO_DEPENDENCIES),
+          project));
+
+        if (MessageDialogBuilder.yesNo("Missing or obsolete Espresso dependencies",
+                                       "Some dependencies for running Espresso tests are missing or obsolete.\n" +
+                                       "Would you like to automatically add/update Espresso dependencies for this app?\n" +
+                                       "To complete the set up, Gradle might ask you to install the missing libraries.\n" +
+                                       "Please click on the corresponding link(s) to install them.").icon(null).ask(rootPanel)) {
+          setupEspresso(setupModels.projectModel(), setupModels.gradleBuildModel(), setupModels.gradleModuleSystem());
         }
       }
       return myUsesAndroidxDependency;
     }
 
-    private boolean hasAllRequiredEspressoDependencies(@NotNull AndroidModel androidModel,
+    private boolean hasAllRequiredEspressoDependencies(@Nullable AndroidModel androidModel,
                                                        @NotNull GradleModuleSystem gradleModuleSystem) {
       initializeDependencyRequirements();
       // TODO: To improve performance, consider doing these checks in a single pass.
@@ -175,6 +210,7 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
              && hasUptodateRulesDependency(gradleModuleSystem)
              && (!myNeedsContribDependency || hasUptodateEspressoContribDependency(gradleModuleSystem))
              && (!myUsesAndroidxDependency || !myUsesGrantPermissionRule || hasUptodateAndroidxRulesDependency(gradleModuleSystem))
+             && androidModel != null
              && hasSetInstrumentationRunner(androidModel);
     }
 
@@ -264,17 +300,22 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
     private void setupEspresso(@NotNull ProjectBuildModel projectModel,
                                @NotNull GradleBuildModel gradleBuildModel,
                                @NotNull GradleModuleSystem gradleModuleSystem) {
+      if (projectSystem.getProject().isDisposed() || testClassModule.isDisposed()) {
+        return;
+      }
       if (!myUsesAnyEspressoDependency) {
-        // Establish whether to use androidx Espresso dependencies based on other present dependencies.
-        for (GoogleMavenArtifactId artifactId : GoogleMavenArtifactId.values()) {
-          if (artifactId.getMavenGroupId().startsWith("androidx.") || artifactId.getMavenGroupId().equals("com.google.android.material")) {
-            Component component = gradleModuleSystem.getResolvedDependency(artifactId.getModule(), DependencyScopeType.MAIN);
-            if (component != null) {
-              myUsesAndroidxDependency = true;
-              break;
+        ReadAction.run(() -> {
+          // Establish whether to use androidx Espresso dependencies based on other present dependencies.
+          for (GoogleMavenArtifactId artifactId : GoogleMavenArtifactId.values()) {
+            if (artifactId.getMavenGroupId().startsWith("androidx.") || artifactId.getMavenGroupId().equals("com.google.android.material")) {
+              Component component = gradleModuleSystem.getResolvedDependency(artifactId.getModule(), DependencyScopeType.MAIN);
+              if (component != null) {
+                myUsesAndroidxDependency = true;
+                break;
+              }
             }
           }
-        }
+        });
       }
 
       new Task.Modal(projectSystem.getProject(), "Setting up Espresso", false) {
@@ -293,6 +334,9 @@ public class EspressoSetupGradleToken implements EspressoSetupToken<GradleProjec
           }
 
           WriteCommandAction.runWriteCommandAction(myProject, () -> {
+            if ((myProject != null && myProject.isDisposed()) || testClassModule.isDisposed()) {
+              return;
+            }
             addOrUpdateEspressoCoreDependency();
             addOrUpdateRulesDependency();
             if (myNeedsContribDependency) {
