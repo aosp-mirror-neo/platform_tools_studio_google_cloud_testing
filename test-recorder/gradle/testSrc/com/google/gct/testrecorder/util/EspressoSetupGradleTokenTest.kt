@@ -60,10 +60,13 @@ import com.intellij.openapi.ui.TestDialog
 import com.intellij.openapi.ui.TestDialogManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.impl.PsiDocumentManagerEx
 import com.intellij.psi.impl.PsiManagerEx
 import com.intellij.testFramework.replaceService
 import java.awt.EventQueue
+import java.lang.ref.Reference
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -236,6 +239,10 @@ class EspressoSetupGradleTokenTest {
       testDisposable,
     )
 
+    // Several tests assert that an edited document stays uncommitted. Keep the platform from
+    // committing it in the background while they run.
+    (PsiDocumentManager.getInstance(projectRule.project) as PsiDocumentManagerEx).disableBackgroundCommit(testDisposable)
+
     val rootDir = getBaseDirPath(projectRule.project)
     VfsUtil.markDirtyAndRefresh(false, true, true, rootDir)
   }
@@ -332,7 +339,7 @@ class EspressoSetupGradleTokenTest {
     assertThat(syncTriggers).containsExactly(TRIGGER_ESPRESSO_SETUP)
 
     FileDocumentManager.getInstance().saveAllDocuments()
-    val updatedBuildGradle = rootDir.resolve("app/build.gradle").readText()
+    val updatedBuildGradle = readSavedText(appBuildVirtualFile)
     assertThat(updatedBuildGradle).contains("androidx.test.runner.AndroidJUnitRunner")
     assertThat(updatedBuildGradle).contains("androidx.test.espresso:espresso-core:")
     assertThat(updatedBuildGradle).contains("androidx.test.ext:junit:")
@@ -352,9 +359,8 @@ class EspressoSetupGradleTokenTest {
     val documentRef = AtomicReference<Document>()
     WriteCommandAction.runWriteCommandAction(project) {
       val doc = FileDocumentManager.getInstance().getDocument(appBuildVirtualFile)!!
-      PsiDocumentManager.getInstance(project).getPsiFile(doc)
       documentRef.set(doc)
-      doc.setText(INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit under WriteIntentReadAction\n")
+      setTextLeavingUncommitted(doc, INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit under WriteIntentReadAction\n")
     }
     assertThat(PsiDocumentManager.getInstance(project).isCommitted(documentRef.get())).isFalse()
 
@@ -388,7 +394,7 @@ class EspressoSetupGradleTokenTest {
     assertThat(syncTriggers).containsExactly(TRIGGER_ESPRESSO_SETUP)
 
     FileDocumentManager.getInstance().saveAllDocuments()
-    val updatedBuildGradle = rootDir.resolve("app/build.gradle").readText()
+    val updatedBuildGradle = readSavedText(appBuildVirtualFile)
     assertThat(updatedBuildGradle).contains("// uncommitted edit under WriteIntentReadAction")
     assertThat(updatedBuildGradle).contains("androidx.test.runner.AndroidJUnitRunner")
     assertThat(updatedBuildGradle).contains("androidx.test.espresso:espresso-core:")
@@ -409,9 +415,8 @@ class EspressoSetupGradleTokenTest {
     val documentRef = AtomicReference<Document>()
     WriteCommandAction.runWriteCommandAction(project) {
       val doc = FileDocumentManager.getInstance().getDocument(appBuildVirtualFile)!!
-      PsiDocumentManager.getInstance(project).getPsiFile(doc)
       documentRef.set(doc)
-      doc.setText(INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit on lock-free EDT\n")
+      setTextLeavingUncommitted(doc, INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit on lock-free EDT\n")
     }
     assertThat(PsiDocumentManager.getInstance(project).isCommitted(documentRef.get())).isFalse()
 
@@ -437,7 +442,7 @@ class EspressoSetupGradleTokenTest {
     assertThat(syncTriggers).containsExactly(TRIGGER_ESPRESSO_SETUP)
 
     FileDocumentManager.getInstance().saveAllDocuments()
-    val updatedBuildGradle = rootDir.resolve("app/build.gradle").readText()
+    val updatedBuildGradle = readSavedText(appBuildVirtualFile)
     assertThat(updatedBuildGradle).contains("// uncommitted edit on lock-free EDT")
     assertThat(updatedBuildGradle).contains("androidx.test.runner.AndroidJUnitRunner")
     assertThat(updatedBuildGradle).contains("androidx.test.espresso:espresso-core:")
@@ -606,9 +611,8 @@ class EspressoSetupGradleTokenTest {
     val documentRef = AtomicReference<Document>()
     WriteCommandAction.runWriteCommandAction(project) {
       val doc = FileDocumentManager.getInstance().getDocument(appBuildVirtualFile)!!
-      PsiDocumentManager.getInstance(project).getPsiFile(doc)
       documentRef.set(doc)
-      doc.setText(KOTLIN_AND_NATIVE_BUILD_GRADLE)
+      setTextLeavingUncommitted(doc, KOTLIN_AND_NATIVE_BUILD_GRADLE)
     }
     assertThat(PsiDocumentManager.getInstance(project).isCommitted(documentRef.get())).isFalse()
 
@@ -683,9 +687,8 @@ class EspressoSetupGradleTokenTest {
     val documentRef = AtomicReference<Document>()
     WriteCommandAction.runWriteCommandAction(project) {
       val doc = FileDocumentManager.getInstance().getDocument(appBuildVirtualFile)!!
-      PsiDocumentManager.getInstance(project).getPsiFile(doc)
       documentRef.set(doc)
-      doc.setText(KOTLIN_AND_NATIVE_BUILD_GRADLE)
+      setTextLeavingUncommitted(doc, KOTLIN_AND_NATIVE_BUILD_GRADLE)
     }
     assertThat(PsiDocumentManager.getInstance(project).isCommitted(documentRef.get())).isFalse()
 
@@ -712,7 +715,7 @@ class EspressoSetupGradleTokenTest {
       // to verify supportsKotlin does not commit documents or parse Gradle DSL when returning true.
       WriteCommandAction.runWriteCommandAction(project) {
         val doc = documentRef.get()
-        doc.setText(INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit after adding facet\n")
+        setTextLeavingUncommitted(doc, INITIAL_APP_BUILD_GRADLE + "\n// uncommitted edit after adding facet\n")
       }
       assertThat(PsiDocumentManager.getInstance(project).isCommitted(documentRef.get())).isFalse()
 
@@ -753,6 +756,22 @@ class EspressoSetupGradleTokenTest {
       FacetUtil.deleteFacet(kotlinFacet)
     }
   }
+
+  /**
+   * Changes the text of [document] and leaves the change uncommitted. A change only counts as uncommitted if the PSI of the document is
+   * cached when the text changes, and that cache is weak, so the PSI is kept reachable until then.
+   */
+  private fun setTextLeavingUncommitted(document: Document, text: String) {
+    val psiFile = PsiDocumentManager.getInstance(projectRule.project).getPsiFile(document)
+    document.setText(text)
+    Reference.reachabilityFence(psiFile)
+  }
+
+  /**
+   * Returns the saved content of [file]. Reads through the VFS because file content is written to disk asynchronously: right after a save,
+   * java.io can still see the old content.
+   */
+  private fun readSavedText(file: VirtualFile): String = VfsUtil.loadText(file)
 
   private fun runOnLockFreeEdt(block: () -> Unit) {
     SwingUtilities.invokeAndWait {
